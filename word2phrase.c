@@ -17,8 +17,10 @@
 #include <string.h>
 #include <math.h>
 #include <pthread.h>
+#include <limits.h>
 
 #define MAX_STRING 60
+
 
 const int vocab_hash_size = 500000000; // Maximum 500M entries in the vocabulary
 
@@ -29,12 +31,12 @@ struct vocab_word {
   char *word;
 };
 
-char train_file[MAX_STRING], output_file[MAX_STRING];
+char train_file[MAX_STRING], output_file[MAX_STRING], formula[MAX_STRING];
 struct vocab_word *vocab;
-int debug_mode = 2, min_count = 5, *vocab_hash, min_reduce = 1;
+int debug_mode = 2, min_count = 5, *vocab_hash, min_reduce = 1, formulaFlag=1;
 long long vocab_max_size = 10000, vocab_size = 0;
 long long train_words = 0;
-real threshold = 100;
+real threshold = 8;
 
 unsigned long long next_random = 1;
 
@@ -203,6 +205,37 @@ void LearnVocabFromTrainFile() {
   fclose(fin);
 }
 
+//bool isInfinite(const double pV)
+//{
+//    return (fabs(pV) == std::numeric_limits::infinity());
+//}
+int isInfinite(const double pV)
+{
+    return !finite(pV);
+}
+static double binomial(int k, int n,double x){
+    return pow(x,k)*pow(1-x,n-k);
+}
+
+real calculateLikelihoodRatio(int c1, int c2, int c12, int N){
+    real p = ((real)c2)/N;
+    real p1= ((real) c12)/c1;
+    real p2= ((real) (c2-c12))/(N-c1);
+    real part1 = log(binomial(c12,c1,p));
+    real part2= log(binomial(c2-c12,N-c1,p));
+    real part3 = log(binomial(c12,c1,p1));
+    real part4 = log(binomial(c2-c12,N-c1,p2));
+    if (isInfinite(part1))
+        part1= -10000000;
+    if (isInfinite(part2))
+        part2= -10000000;
+    if (isInfinite(part3))
+        part3= -10000000;
+    if (isInfinite(part4))
+        part4= -10000000;
+    return -2*(part1+part2-part3-part4);
+}
+
 void TrainModel() {
   long long pa = 0, pb = 0, pab = 0, oov, i, li = -1, cn = 0;
   char word[MAX_STRING], last_word[MAX_STRING], bigram_word[MAX_STRING * 2];
@@ -237,8 +270,11 @@ void TrainModel() {
     if (i == -1) oov = 1; else pab = vocab[i].cn;
     if (pa < min_count) oov = 1;
     if (pb < min_count) oov = 1;
-    if (oov) score = 0; else score = (pab - min_count) / (real)pa / (real)pb * (real)train_words;
-    if (score > threshold) {
+      if (oov) score = 0; else {
+          if (formulaFlag) score = calculateLikelihoodRatio(pa,pb,(pab-min_count),train_words);
+          else score = (pab - min_count) / (real)pa / (real)pb * (real)train_words;
+      }
+      if (score > threshold) {
       fprintf(fo, "_%s", word);
       pb = 0;
     } else fprintf(fo, " %s", word);
@@ -272,6 +308,9 @@ int main(int argc, char **argv) {
     printf("\t\tUse <file> to save the resulting word vectors / word clusters / phrases\n");
     printf("\t-min-count <int>\n");
     printf("\t\tThis will discard words that appear less than <int> times; default is 5\n");
+    printf("\t-formula <likelihood|mutualinfo>\n");
+    printf("\t\tWhat formula to use (default is likelihood)\n");
+
     printf("\t-threshold <float>\n");
     printf("\t\t The <float> value represents threshold for forming the phrases (higher means less phrases); default 100\n");
     printf("\t-debug <int>\n");
@@ -281,10 +320,17 @@ int main(int argc, char **argv) {
     return 0;
   }
   if ((i = ArgPos((char *)"-train", argc, argv)) > 0) strcpy(train_file, argv[i + 1]);
+  
+
   if ((i = ArgPos((char *)"-debug", argc, argv)) > 0) debug_mode = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-output", argc, argv)) > 0) strcpy(output_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-min-count", argc, argv)) > 0) min_count = atoi(argv[i + 1]);
-  if ((i = ArgPos((char *)"-threshold", argc, argv)) > 0) threshold = atof(argv[i + 1]);
+  
+  if ((i = ArgPos((char *)"-formula", argc, argv)) > 0) strcpy(formula, argv[i + 1]);
+    if (!strcmp(formula, "mutualinfo")) formulaFlag=0;
+    if(!formulaFlag) threshold=100;
+    if ((i = ArgPos((char *)"-threshold", argc, argv)) > 0) threshold = atof(argv[i + 1]);
+    
   vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
   vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int));
   TrainModel();
