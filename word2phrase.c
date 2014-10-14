@@ -1,17 +1,3 @@
-//  Copyright 2013 Google Inc. All Rights Reserved.
-//
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,9 +10,9 @@
 #define MAX_STRING 60
 
 
-const int vocab_hash_size = 500000000; // Maximum 500M entries in the vocabulary
+const int vocab_hash_size = 500000000;
 
-typedef float real;                    // Precision of float numbers
+typedef float real;
 
 struct vocab_word {
     long long cn;
@@ -40,19 +26,12 @@ struct candidate_word {
 };
 
 
-char* strlwr(char str[]){
-    char mychar;
-    int counter=0;
-    char *x=(char *)calloc(strlen(str), sizeof(char));
-    while (str[counter])
-    {
-        mychar=str[counter];
-        x[counter] = tolower(mychar);
-        counter++;
-    }
-    x[counter]=0;
-    return x;
-}
+void strlwr(char *str){
+    char *p = str;
+    for ( ; *p; ++p)
+        *p = tolower(*p);
+};
+
 char train_file[MAX_STRING], output_file[MAX_STRING], formula[MAX_STRING];
 struct vocab_word *vocab;
 struct candidate_word *candidates;
@@ -63,32 +42,6 @@ long long train_words = 0;
 real threshold = 8;
 
 unsigned long long next_random = 1;
-
-
-
-// Reads a single word from a file, assuming space + tab + EOL to be word boundaries
-
-void ReadWordLower(char *word, FILE *fin) {
-    int a = 0, ch;
-    while (!feof(fin)) {
-        ch = fgetc(fin);
-        if (ch == 13) continue;
-        if ((ch == ' ') || (ch == '\t') || (ch == '\n')) {
-            if (a > 0) {
-                if (ch == '\n') ungetc(ch, fin);
-                break;
-            }
-            if (ch == '\n') {
-                strcpy(word, (char *)"</s>");
-                return;
-            } else continue;
-        }
-        word[a] = tolower(ch);
-        a++;
-        if (a >= MAX_STRING - 1) a--;   // Truncate too long words
-    }
-    word[a] = 0;
-}
 
 void ReadWord(char *word, FILE *fin) {
     int a = 0, ch;
@@ -122,7 +75,7 @@ int GetWordHash(char *word) {
 
 // Returns position of a word in the vocabulary; if the word is not found, returns -1
 int SearchVocab(char *word) {
-    word = strlwr(word);
+    strlwr(word);
     unsigned int hash = GetWordHash(word);
     while (1) {
         if (vocab_hash[hash] == -1) return -1;
@@ -160,12 +113,9 @@ int AddWordsToCandidateList(char *word1, char *word2, real score) {
 }
 
 
-
-
 // Adds a word to the vocabulary
 int AddWordToVocab(char *word) {
-    //word = toLowerCase(word);
-    //char* word2 = strlwr(word);
+    strlwr(word);
     unsigned int hash, length = strlen(word) + 1;
     if (length > MAX_STRING) length = MAX_STRING;
     vocab[vocab_size].word = (char *)calloc(length, sizeof(char));
@@ -242,9 +192,10 @@ void LearnVocabFromTrainFile() {
         exit(1);
     }
     vocab_size = 0;
-    AddWordToVocab((char *)"</s>");
+    strcpy(word,(char *)"</s>");
+    AddWordToVocab(word);
     while (1) {
-        ReadWordLower(word, fin);
+        ReadWord(word, fin);
         if (feof(fin)) break;
         if (!strcmp(word, "</s>")) {
             start = 1;
@@ -279,10 +230,6 @@ void LearnVocabFromTrainFile() {
     fclose(fin);
 }
 
-//bool isInfinite(const double pV)
-//{
-//    return (fabs(pV) == std::numeric_limits::infinity());
-//}
 int isInfinite(const double pV)
 {
     return !finite(pV);
@@ -310,54 +257,6 @@ real calculateLikelihoodRatio(int c1, int c2, int c12, int N){
     return -2*(part1+part2-part3-part4);
 }
 
-void TrainModel2() {
-    long long pa = 0, pb = 0, pab = 0, oov, i, li = -1, cn = 0;
-    char word[MAX_STRING], last_word[MAX_STRING], bigram_word[MAX_STRING * 2];
-    real score;
-    FILE *fo, *fin;
-    printf("Starting training using file %s\n", train_file);
-    LearnVocabFromTrainFile();
-    fin = fopen(train_file, "rb");
-    fo = fopen(output_file, "wb");
-    word[0] = 0;
-    
-    while (1) {
-        strcpy(last_word, word);
-        ReadWord(word, fin);
-        if (feof(fin)) break;
-        if (!strcmp(word, "</s>")) {
-            fprintf(fo, "\n");
-            continue;
-        }
-        cn++;
-        if ((debug_mode > 1) && (cn % 100000 == 0)) {
-            printf("Words written: %lldK%c", cn / 1000, 13);
-            fflush(stdout);
-        }
-        oov = 0;
-        i = SearchVocab(word);
-        if (i == -1) oov = 1; else pb = vocab[i].cn;
-        if (li == -1) oov = 1;
-        li = i;
-        sprintf(bigram_word, "%s_%s", last_word, word);
-        bigram_word[MAX_STRING - 1] = 0;
-        i = SearchVocab(bigram_word);
-        if (i == -1) oov = 1; else pab = vocab[i].cn;
-        if (pa < min_count) oov = 1;
-        if (pb < min_count) oov = 1;
-        if (oov) score = 0; else {
-            if (formulaFlag) score = calculateLikelihoodRatio(pa,pb,(pab-min_count),train_words);
-            else score = (pab - min_count) / (real)pa / (real)pb * (real)train_words;
-        }
-        if (score > threshold) {
-            fprintf(fo, "_%s", word);
-            pb = 0;
-        } else fprintf(fo, " %s", word);
-        pa = pb;
-    }
-    fclose(fo);
-    fclose(fin);
-}
 static int compar (const void *a, const void *b)
 {
     int aa = *((int *)a), bb = *((int *)b);
@@ -374,7 +273,7 @@ int cmpfunc (const void * a, const void * b)
 }
 void TrainModel() {
     long long pa = 0, pb = 0, pab = 0, oov, i, li = -1, cn = 0;
-    char word[MAX_STRING], last_word[MAX_STRING], bigram_word[MAX_STRING * 2];
+    char orgWord[MAX_STRING],orgLastWord[MAX_STRING],word[MAX_STRING], last_word[MAX_STRING], bigram_word[MAX_STRING * 2];
     real score;
     FILE *fo, *fin;
     printf("Starting training using file %s\n", train_file);
@@ -384,14 +283,19 @@ void TrainModel() {
     word[0] = 0;
     
     while (1) {
+        strcpy(last_word, word);
+        strcpy(orgLastWord, orgWord);
         
         ReadWord(word, fin);
         if (feof(fin)) break;
         if (!strcmp(word, "</s>")) {
-            fprintf(fo, "\n");
+            fprintf(fo, " \n");
             continue;
         }
-        
+        if (!strcmp(word, "\r")) {
+            fprintf(fo, " \r");
+            continue;
+        }
         cn++;
         if ((debug_mode > 1) && (cn % 100000 == 0)) {
             printf("Words written: %lldK%c", cn / 1000, 13);
@@ -399,9 +303,7 @@ void TrainModel() {
         }
         oov = 0;
         
-        
-        
-        //strlwr(word);
+        strcpy(orgWord, word);
         i = SearchVocab(word);
         if (i == -1) oov = 1; else pb = vocab[i].cn;
         if (li == -1) oov = 1;
@@ -418,7 +320,7 @@ void TrainModel() {
         }
         if (score > threshold) {
             //fprintf(fo, "_%s", word);
-            AddWordsToCandidateList(last_word,word,score);
+            AddWordsToCandidateList(orgLastWord,orgWord,score);
             //pb = 0;
         } else {
             if (candidates_size>0)
@@ -445,7 +347,7 @@ void TrainModel() {
                 //if (idx2[k]!=(candidates_size-1)) fprintf(fo, " %s", last_word);
                 candidates_size=0;
             }
-            fprintf(fo, " %s", word);
+            fprintf(fo, " %s", orgWord);
         }
         pa = pb;
     }
@@ -464,12 +366,7 @@ int ArgPos(char *str, int argc, char **argv) {
     }
     return -1;
 }
-int main2(int argc, char **argv) {
-    char* s = "Hello world\n";
-    s = strlwr(s);
-    printf(s);
-    return 0;
-}
+
 int main(int argc, char **argv) {
     int i;
     if (argc == 1) {
